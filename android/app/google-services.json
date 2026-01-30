@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "385398857892",
+    "project_id": "aqi-monitoring-41cda",
+    "storage_bucket": "aqi-monitoring-41cda.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:385398857892:android:dccec5e27581cee0cb0631",
+        "android_client_info": {
+          "package_name": "com.edunet.aqi_monitoring"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyALBzxhcFn2-uGB51gT_u1WAwpIK-ix9Jo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
