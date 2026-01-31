@@ -43,5 +43,21 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-# System / Cloud folders
+
+
+# OneDrive
 OneDrive/
+
+# Firebase / secrets
+serviceAccountKey.json
+*.env
+
+# IDE
+.vscode/
+
+# Flutter
+.build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+

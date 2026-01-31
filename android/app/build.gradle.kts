@@ -47,9 +47,11 @@ dependencies {
 
     // Other dependencies
     implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.10")
+
+    
 }
 
 flutter {
     source = "../.."
 }
-apply plugin: 'com.google.gms.google-services'
+

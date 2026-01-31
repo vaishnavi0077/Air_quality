@@ -11,6 +11,20 @@ import 'dart:math';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
+
+// MOVE AQIDataPoint CLASS OUTSIDE THE STATE CLASS
+class AQIDataPoint {
+  final DateTime timestamp;
+  final int aqi;
+  final String city;
+  
+  AQIDataPoint({
+    required this.timestamp,
+    required this.aqi,
+    required this.city,
+  });
+}
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -31,6 +45,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int _selectedDay = 0;
   final PageController _newsPageController = PageController(viewportFraction: 0.85);
   int _currentNewsIndex = 0;
+  
+  // Graph Variables
+  bool _showGraph = false;
+  List<AQIDataPoint> _graphData = [];
+  List<AQIDataPoint> _hourlyData = [];
+  List<AQIDataPoint> _dailyData = [];
+  String _selectedGraphType = 'hourly'; // 'hourly', 'daily'
   
   // Real News Variables
   List<Map<String, dynamic>> _realNews = [];
@@ -82,6 +103,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _cloudAnimation = Tween<double>(begin: 0, end: 2 * pi).animate(
       CurvedAnimation(parent: _controller, curve: Curves.linear),
     );
+    
+    // Load initial data
+    _loadGraphData();
+    _fetchRealNews();
   }
 
   @override
@@ -91,10 +116,137 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.dispose();
   }
 
+  // Load Graph Data
+  Future<void> _loadGraphData() async {
+    try {
+      // Load historical data from Firestore
+      final snapshot = await _firestore
+          .collection('aqi_data')
+          .where('city', isEqualTo: _selectedCity)
+          .orderBy('timestamp', descending: true)
+          .limit(48) // Last 48 data points
+          .get();
+      
+      if (snapshot.docs.isNotEmpty) {
+        List<AQIDataPoint> dataPoints = [];
+        
+        for (var doc in snapshot.docs) {
+          final data = doc.data();
+          final timestamp = (data['timestamp'] as Timestamp).toDate();
+          final aqi = data['aqi'] as int;
+          
+          dataPoints.add(AQIDataPoint(
+            timestamp: timestamp,
+            aqi: aqi,
+            city: _selectedCity,
+          ));
+        }
+        
+        // Sort by timestamp (oldest to newest)
+        dataPoints.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        
+        setState(() {
+          _graphData = dataPoints;
+          _processHourlyData();
+          _processDailyData();
+        });
+      } else {
+        _generateSampleData();
+      }
+    } catch (e) {
+      print('Error loading graph data: $e');
+      _generateSampleData();
+    }
+  }
+
+  void _processHourlyData() {
+    if (_graphData.isEmpty) return;
+    
+    List<AQIDataPoint> hourly = [];
+    
+    // Group by hour
+    Map<String, List<int>> hourlyMap = {};
+    
+    for (var point in _graphData) {
+      String hourKey = DateFormat('MM/dd HH:00').format(point.timestamp);
+      if (!hourlyMap.containsKey(hourKey)) {
+        hourlyMap[hourKey] = [];
+      }
+      hourlyMap[hourKey]!.add(point.aqi);
+    }
+    
+    for (var entry in hourlyMap.entries) {
+      final avgAQI = (entry.value.reduce((a, b) => a + b) / entry.value.length).round();
+      hourly.add(AQIDataPoint(
+        timestamp: DateFormat('MM/dd HH:00').parse(entry.key),
+        aqi: avgAQI,
+        city: _selectedCity,
+      ));
+    }
+    
+    setState(() {
+      _hourlyData = hourly;
+    });
+  }
+
+  void _processDailyData() {
+    if (_graphData.isEmpty) return;
+    
+    List<AQIDataPoint> daily = [];
+    
+    // Group by day
+    Map<String, List<int>> dailyMap = {};
+    
+    for (var point in _graphData) {
+      String dayKey = DateFormat('MM/dd').format(point.timestamp);
+      if (!dailyMap.containsKey(dayKey)) {
+        dailyMap[dayKey] = [];
+      }
+      dailyMap[dayKey]!.add(point.aqi);
+    }
+    
+    for (var entry in dailyMap.entries) {
+      final avgAQI = (entry.value.reduce((a, b) => a + b) / entry.value.length).round();
+      daily.add(AQIDataPoint(
+        timestamp: DateFormat('MM/dd').parse(entry.key),
+        aqi: avgAQI,
+        city: _selectedCity,
+      ));
+    }
+    
+    setState(() {
+      _dailyData = daily;
+    });
+  }
+
+  void _generateSampleData() {
+    List<AQIDataPoint> sampleData = [];
+    final now = DateTime.now();
+    
+    // Generate hourly data for last 24 hours
+    for (int i = 0; i < 24; i++) {
+      final time = now.subtract(Duration(hours: 23 - i));
+      final aqi = 120 + Random().nextInt(80); // Random AQI between 120-200
+      
+      sampleData.add(AQIDataPoint(
+        timestamp: time,
+        aqi: aqi,
+        city: _selectedCity,
+      ));
+    }
+    
+    setState(() {
+      _graphData = sampleData;
+      _hourlyData = sampleData;
+      _dailyData = sampleData;
+    });
+  }
+
   // Handle navigation item taps
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+      _showGraph = false; // Close graph if open
     });
   }
 
@@ -111,12 +263,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     } else {
       setState(() {
         _selectedIndex = index;
+        _showGraph = false; // Close graph if open
       });
     }
   }
 
   // Method to get screen content based on selection
   Widget _getScreenContent() {
+    if (_showGraph) {
+      return _buildGraphView();
+    }
+    
     switch (_selectedIndex) {
       case 0: // Home - Use new enhanced AQI dashboard
         return _buildNewHomeContent();
@@ -125,7 +282,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       case 2: // Health
         return Padding(
           padding: const EdgeInsets.only(top: 16.0),
-          child: HealthRecommendationScreen(),
+          child: AqiDashboardScreen()                                           //HealthScreen(),
         );
       case 3: // Alerts
         return _buildAlertsContent();
@@ -350,7 +507,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text(
-          _getAppBarTitle(),
+          _showGraph ? 'AQI Graph - $_selectedCity' : _getAppBarTitle(),
           style: TextStyle(
             color: AppColors.textOnPrimary,
             fontWeight: FontWeight.w600,
@@ -359,7 +516,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         backgroundColor: AppColors.primary,
         elevation: 2,
         centerTitle: true,
-        
+        leading: _showGraph
+            ? IconButton(
+                icon: Icon(Icons.arrow_back, color: AppColors.textOnPrimary),
+                onPressed: () {
+                  setState(() {
+                    _showGraph = false;
+                  });
+                },
+              )
+            : null,
         actions: [
           IconButton(
             icon: Icon(Icons.person_outline, color: AppColors.textOnPrimary),
@@ -379,7 +545,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       endDrawer: _buildDrawer(),
 
       body: _getScreenContent(),
-      bottomNavigationBar: WavyFloatingNavBar(
+      bottomNavigationBar: _showGraph ? null : WavyFloatingNavBar(
         selectedIndex: _selectedIndex,
         onItemTapped: _onItemTapped,
         backgroundColor: AppColors.surface,
@@ -415,7 +581,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
       
       // Refresh News Floating Button (only on Home tab)
-      floatingActionButton: _selectedIndex == 0 ? FloatingActionButton(
+      floatingActionButton: _selectedIndex == 0 && !_showGraph ? FloatingActionButton(
         backgroundColor: _aqiColor,
         foregroundColor: Colors.white,
         onPressed: _fetchRealNews,
@@ -424,6 +590,369 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             : const Icon(Icons.refresh),
       ) : null,
     );
+  }
+
+  // ============ GRAPH VIEW ============
+  Widget _buildGraphView() {
+    final currentData = _selectedGraphType == 'hourly' ? _hourlyData : _dailyData;
+    
+    return Container(
+      color: Colors.white,
+      child: Column(
+        children: [
+          // Current AQI Info
+          Container(
+            padding: EdgeInsets.all(20),
+            color: _aqiColor.withOpacity(0.1),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Current AQI',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    Text(
+                      '$_currentAQI',
+                      style: TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color: _aqiColor,
+                      ),
+                    ),
+                    Text(
+                      _currentStatus,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: _aqiColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    PopupMenuButton<String>(
+                      onSelected: (value) {
+                        setState(() {
+                          _selectedGraphType = value;
+                        });
+                      },
+                      icon: Icon(Icons.filter_list, color: _aqiColor),
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: 'hourly',
+                          child: Row(
+                            children: [
+                              Icon(Icons.access_time, color: _aqiColor),
+                              SizedBox(width: 8),
+                              Text('Hourly Trend'),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'daily',
+                          child: Row(
+                            children: [
+                              Icon(Icons.calendar_today, color: _aqiColor),
+                              SizedBox(width: 8),
+                              Text('Daily Trend'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        Icon(_currentTrendIcon, color: _trendColor, size: 24),
+                        SizedBox(width: 4),
+                        Text(
+                          _currentTrend,
+                          style: TextStyle(
+                            fontSize: 20,
+                            color: _trendColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      _trendText,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: _trendColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          
+          // Graph
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: currentData.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.bar_chart, size: 60, color: Colors.grey[300]),
+                          SizedBox(height: 16),
+                          Text(
+                            'No data available',
+                            style: TextStyle(color: Colors.grey[500]),
+                          ),
+                          SizedBox(height: 8),
+                          ElevatedButton(
+                            onPressed: _loadGraphData,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _aqiColor,
+                            ),
+                            child: Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : SfCartesianChart(
+                      backgroundColor: Colors.transparent,
+                      primaryXAxis: DateTimeAxis(
+                        dateFormat: _selectedGraphType == 'hourly' 
+                            ? DateFormat('HH:mm')
+                            : DateFormat('MM/dd'),
+                        majorGridLines: MajorGridLines(width: 0),
+                        edgeLabelPlacement: EdgeLabelPlacement.shift,
+                        interval: _selectedGraphType == 'hourly' ? 3 : 1,
+                        labelStyle: TextStyle(color: Colors.grey[600]),
+                      ),
+                      primaryYAxis: NumericAxis(
+                        minimum: 0,
+                        maximum: 300,
+                        interval: 50,
+                        axisLine: AxisLine(width: 0),
+                        majorTickLines: MajorTickLines(size: 0),
+                        labelStyle: TextStyle(color: Colors.grey[600]),
+                        labelFormat: '{value}',
+                      ),
+                      series: <CartesianSeries>[
+  AreaSeries<AQIDataPoint, DateTime>(
+    dataSource: currentData,
+    xValueMapper: (AQIDataPoint data, _) => data.timestamp,
+    yValueMapper: (AQIDataPoint data, _) => data.aqi,
+    name: 'AQI',
+    color: _aqiColor.withOpacity(0.3),
+    borderColor: _aqiColor,
+    borderWidth: 2,
+    dataLabelSettings: DataLabelSettings(
+      isVisible: false,
+    ),
+    markerSettings: MarkerSettings(
+      isVisible: true,
+      shape: DataMarkerType.circle,
+      borderWidth: 2,
+      borderColor: _aqiColor,
+      color: Colors.white,
+    ),
+  ),
+  LineSeries<AQIDataPoint, DateTime>(
+    dataSource: currentData,
+    xValueMapper: (AQIDataPoint data, _) => data.timestamp,
+    yValueMapper: (AQIDataPoint data, _) => data.aqi,
+    name: 'AQI Line',
+    color: _aqiColor,
+    width: 3,
+    dataLabelSettings: DataLabelSettings(
+      isVisible: false,
+    ),
+  ),
+],
+                      
+
+
+                      tooltipBehavior: TooltipBehavior(
+                        enable: true,
+                        format: 'AQI: point.y',
+                        color: _aqiColor,
+                        textStyle: TextStyle(color: Colors.white),
+                      ),
+                    ),
+            ),
+          ),
+          
+          // AQI Color Scale
+          Container(
+            padding: EdgeInsets.all(20),
+            color: Colors.grey[50],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'AQI Color Scale',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[800],
+                  ),
+                ),
+                SizedBox(height: 12),
+                Container(
+                  height: 12,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    gradient: LinearGradient(
+                      colors: [
+                        Color(0xFF00E400), // Good
+                        Color(0xFFFFFF00), // Moderate
+                        Color(0xFFFF7E00), // Unhealthy for SG
+                        Color(0xFFFF0000), // Unhealthy
+                        Color(0xFF99004C), // Very Unhealthy
+                        Color(0xFF7E0023), // Hazardous
+                      ],
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        left: (_currentAQI / 500) * 100 - 1.5,
+                        child: Container(
+                          width: 3,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _aqiColor,
+                                blurRadius: 8,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: const [
+                    Text('0', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    Text('50', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    Text('100', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    Text('150', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    Text('200', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    Text('300', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    Text('500', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          
+          // Data Points List
+          if (currentData.isNotEmpty && currentData.length <= 10)
+            Container(
+              height: 150,
+              padding: EdgeInsets.all(16),
+              color: Colors.white,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Recent Data Points',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: currentData.length,
+                      itemBuilder: (context, index) {
+                        final data = currentData[index];
+                        final time = _selectedGraphType == 'hourly'
+                            ? DateFormat('HH:mm').format(data.timestamp)
+                            : DateFormat('MM/dd').format(data.timestamp);
+                        
+                        return Container(
+                          margin: EdgeInsets.only(right: 12),
+                          padding: EdgeInsets.all(12),
+                          width: 100,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[50],
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                time,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                '${data.aqi}',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: _getAQIColor(data.aqi),
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                _getAQIStatus(data.aqi),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _getAQIColor(data.aqi),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Color _getAQIColor(int aqi) {
+    if (aqi <= 50) return Color(0xFF00E400);
+    if (aqi <= 100) return Color(0xFFFFFF00);
+    if (aqi <= 150) return Color(0xFFFF7E00);
+    if (aqi <= 200) return Color(0xFFFF0000);
+    if (aqi <= 300) return Color(0xFF99004C);
+    return Color(0xFF7E0023);
+  }
+
+  String _getAQIStatus(int aqi) {
+    if (aqi <= 50) return 'Good';
+    if (aqi <= 100) return 'Moderate';
+    if (aqi <= 150) return 'Unhealthy for SG';
+    if (aqi <= 200) return 'Unhealthy';
+    if (aqi <= 300) return 'Very Unhealthy';
+    return 'Hazardous';
   }
 
   // ============ NEW ENHANCED HOME CONTENT ============
@@ -457,46 +986,83 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                 ),
                 const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _selectedCity,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      'Air Quality Index',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _aqiColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _aqiColor.withOpacity(0.3)),
-                  ),
-                  child: Row(
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.bar_chart, size: 16, color: _aqiColor),
-                      const SizedBox(width: 6),
-                      Text(
-                        'View Graph',
+                      DropdownButton<String>(
+                        value: _selectedCity,
+                        isExpanded: true,
                         style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: _aqiColor,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                        underline: Container(),
+                        items: [
+                          'Pune',
+                          'Mumbai',
+                          'Delhi',
+                          'Bangalore',
+                          'Chennai',
+                          'Kolkata',
+                          'Hyderabad',
+                        ].map((String city) {
+                          return DropdownMenuItem<String>(
+                            value: city,
+                            child: Text(city),
+                          );
+                        }).toList(),
+                        onChanged: (String? newValue) async {
+                          if (newValue != null) {
+                            setState(() {
+                              _selectedCity = newValue;
+                            });
+                            // Reload graph data for the new city
+                            await _loadGraphData();
+                          }
+                        },
+                      ),
+                      Text(
+                        'Air Quality Index',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
                         ),
                       ),
                     ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // View Graph Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _showGraph = true;
+                    });
+                    _loadGraphData();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _aqiColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _aqiColor.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.bar_chart, size: 16, color: _aqiColor),
+                        const SizedBox(width: 6),
+                        Text(
+                          'View Graph',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: _aqiColor,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -1884,7 +2450,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  // ============ DRAWER (From old code) ============
+  // ============ DRAWER ============
   Widget _buildDrawer() {
     return Drawer(
       width: MediaQuery.of(context).size.width * 0.85,
@@ -2359,7 +2925,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // ============ OTHER TABS (From old code) ============
+  // ============ OTHER TABS ============
   String _getAppBarTitle() {
     switch (_selectedIndex) {
       case 0: return 'Air Quality Dashboard';

@@ -21,7 +21,7 @@ class _MainContainerState extends State<MainContainer> {
   final List<Widget> _pages = [
     HomeScreen(),
     const ShoppingScreen(),
-    const HealthRecommendationScreen(),
+    const AqiDashboardScreen(),
     const AlertsScreen()
   ];
 
