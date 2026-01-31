@@ -61,3 +61,17 @@ serviceAccountKey.json
 .flutter-plugins
 .flutter-plugins-dependencies
 
+# Virtual environment
+venv/
+.env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Model files (optional)
+aqi_model.pkl
+
+# OS files
+.DS_Store
+
